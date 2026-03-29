@@ -1,52 +1,88 @@
 import React, { useState } from "react";
-import { Sparkles, ArrowRight, Zap, CheckCircle2 } from "lucide-react";
+import { Sparkles, ArrowRight, Zap, CheckCircle2, AlertTriangle, Cpu } from "lucide-react";
+import { fetchAllAWSResources, isConfigured } from "../awsClient";
+import { useAccount } from "../AccountContext";
 import "./AIRecommendations.css";
 
-const MOCK_RECOMMENDATIONS = [
-  {
-    id: "rec-001",
-    title: "Downsize Over-provisioned EC2 Instance",
-    description: "Instance 'i-0ab12c34d5e6789f0' (t3.xlarge) CPU utilization has been consistently below 10% for the last 14 days. Downsizing to t3.medium is recommended.",
-    service: "EC2",
-    savings: 85.50,
-    impact: "High",
-    applied: false
-  },
-  {
-    id: "rec-002",
-    title: "Delete Unattached EBS Volume",
-    description: "Volume 'vol-0f123456789abcdef' (500 GB gp3) has been unattached since Oct 12, 2023. Deleting it will stop unnecessary charges.",
-    service: "EBS",
-    savings: 40.00,
-    impact: "Medium",
-    applied: false
-  },
-  {
-    id: "rec-003",
-    title: "Move S3 Data to Infrequent Access",
-    description: "Bucket 'company-backup-logs-2023' has not been accessed in 90 days. Transitioning to S3 Standard-IA will reduce storage costs.",
-    service: "S3",
-    savings: 120.25,
-    impact: "High",
-    applied: false
-  }
-];
-
 function AIRecommendations() {
-  const [recs, setRecs] = useState(MOCK_RECOMMENDATIONS);
+  const { activeArn } = useAccount();
+  const [recs, setRecs] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState("");
 
   const handleApply = (id) => {
-    setRecs(current => current.map(rec => 
+    setRecs(current => current.map(rec =>
       rec.id === id ? { ...rec, applied: true } : rec
     ));
   };
 
-  const runAnalysis = () => {
+  const runAnalysis = async () => {
+    const apiKey = process.env.REACT_APP_GROQ_API_KEY;
+    if (!apiKey || apiKey === "YOUR_GROQ_API_KEY_HERE") {
+      setError("Add your Groq API key to the .env file as REACT_APP_GROQ_API_KEY and restart.");
+      return;
+    }
+
+    setError("");
     setAnalyzing(true);
-    setTimeout(() => {
+
+    try {
+      const resources = await fetchAllAWSResources(activeArn);
+      
+      // Create a rich context for the AI with more details
+      const resourceContext = resources.map(r => ({
+        id: r.id,
+        type: r.type,
+        name: r.name,
+        state: r.state,
+        size: r.size,
+        isIdle: r.isIdle,
+        az: r.az,
+        launchTime: r.launchTime
+      }));
+
+      const prompt = `You are an expert AWS Cost Optimization Architect. I have performed a real-time scan of an AWS environment and found the following resources:
+      ${JSON.stringify(resourceContext)}
+      
+      Analyze these SPECIFIC resources and generate exactly 3 highly actionable cost-saving recommendations as a JSON array.
+      
+      Look specifically for:
+      1. NAT Gateways that are idle or in regions with zero traffic (NAT Gateways cost ~₹3200/mo just to exist).
+      2. EC2 Instances that are 'stopped' or have low utilization.
+      3. EBS Volumes that are 'unattached' (orphaned).
+      4. Elastic IPs that are 'unassociated' (they cost money when NOT used).
+      5. Old Snapshots that are no longer needed.
+      
+      Output ONLY raw JSON with no markdown fences, no explanation, no preamble.
+      Format: [{"id":"ai-1","title":"...","description":"...","service":"EC2|NAT Gateway|EBS|S3|EIP","savings":123.45,"impact":"High|Medium","applied":false}]`;
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+          max_tokens: 1024
+        })
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const content = data.choices[0].message.content;
+      const jsonStart = content.indexOf("[");
+      const jsonEnd = content.lastIndexOf("]") + 1;
+      const parsed = JSON.parse(content.substring(jsonStart, jsonEnd));
+      setRecs(parsed);
+    } catch (err) {
+      setError("AI analysis failed: " + err.message);
+    } finally {
       setAnalyzing(false);
-    }, 2000);
+    }
   };
 
   const totalPotentialSavings = recs
@@ -62,10 +98,10 @@ function AIRecommendations() {
           </div>
           <div>
             <h2 className="ai-title">Compute Optimizer AI</h2>
-            <p className="ai-subtitle">Actionable insights powered by AWS machine learning</p>
+            <p className="ai-subtitle">Live insights powered by Groq Llama 3.1 — completely free</p>
           </div>
         </div>
-        <button 
+        <button
           className={`ai-reanalyze-btn ${analyzing ? 'analyzing' : ''}`}
           onClick={runAnalysis}
           disabled={analyzing}
@@ -73,57 +109,76 @@ function AIRecommendations() {
           {analyzing ? (
             <><div className="ai-spinner"></div> Analyzing...</>
           ) : (
-            <><Zap size={18} /> Re-analyze Infrastructure</>
+            <><Zap size={18} /> Generate AI Insights</>
           )}
         </button>
       </div>
 
-      <div className="ai-summary-banner">
-        <div className="ai-summary-content">
-          <h3 className="ai-summary-title">Total Potential Monthly Savings</h3>
-          <div className="ai-summary-value">₹{totalPotentialSavings.toFixed(2)}</div>
+      {error && (
+        <div className="ai-error-bar">
+          <AlertTriangle size={16} />
+          <span>{error}</span>
         </div>
-        <div className="ai-summary-badge">
-          {recs.filter(r => !r.applied).length} Active Insights
+      )}
+
+      {recs.length > 0 && (
+        <div className="ai-summary-banner">
+          <div className="ai-summary-content">
+            <h3 className="ai-summary-title">Total Potential Monthly Savings</h3>
+            <div className="ai-summary-value">₹{totalPotentialSavings.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+          </div>
+          <div className="ai-summary-badge">
+            {recs.filter(r => !r.applied).length} Active Insights
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="ai-rec-list">
-        {recs.map(rec => (
-          <div key={rec.id} className={`ai-rec-card ${rec.applied ? 'applied' : ''}`}>
-            <div className="ai-rec-card-header">
-              <span className={`ai-service-badge ${rec.service.toLowerCase()}`}>
-                {rec.service}
-              </span>
-              <span className={`ai-impact-badge ${rec.impact.toLowerCase()}`}>
-                {rec.impact} Impact
-              </span>
-            </div>
-            
-            <h4 className="ai-rec-card-title">{rec.title}</h4>
-            <p className="ai-rec-card-desc">{rec.description}</p>
-            
-            <div className="ai-rec-card-footer">
-              <div className="ai-rec-savings">
-                <span className="ai-savings-label">Est. Savings</span>
-                <span className="ai-savings-value">₹{rec.savings.toFixed(2)}/mo</span>
+        {recs.length > 0 ? (
+          recs.map(rec => (
+            <div key={rec.id} className={`ai-rec-card ${rec.applied ? 'applied' : ''}`}>
+              <div className="ai-rec-card-header">
+                <span className={`ai-service-badge ${rec.service.toLowerCase().replace(' ', '-')}`}>
+                  {rec.service}
+                </span>
+                <span className={`ai-impact-badge ${rec.impact.toLowerCase()}`}>
+                  {rec.impact} Impact
+                </span>
               </div>
-              
-              {rec.applied ? (
-                <div className="ai-applied-status">
-                  <CheckCircle2 size={18} /> Applied
+
+              <h4 className="ai-rec-card-title">{rec.title}</h4>
+              <p className="ai-rec-card-desc">{rec.description}</p>
+
+              <div className="ai-rec-card-footer">
+                <div className="ai-rec-savings">
+                  <span className="ai-savings-label">Est. Savings</span>
+                  <span className="ai-savings-value">₹{Number(rec.savings).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/mo</span>
                 </div>
-              ) : (
-                <button 
-                  className="ai-apply-btn"
-                  onClick={() => handleApply(rec.id)}
-                >
-                  Apply Recommendation <ArrowRight size={16} />
-                </button>
-              )}
+
+                {rec.applied ? (
+                  <div className="ai-applied-status">
+                    <CheckCircle2 size={18} /> Applied
+                  </div>
+                ) : (
+                  <button
+                    className="ai-apply-btn"
+                    onClick={() => handleApply(rec.id)}
+                  >
+                    Apply Recommendation <ArrowRight size={16} />
+                  </button>
+                )}
+              </div>
             </div>
+          ))
+        ) : !analyzing ? (
+          <div className="ai-empty-state">
+            <div className="ai-empty-icon">
+              <Cpu size={48} />
+            </div>
+            <h3>No Active Insights</h3>
+            <p>Click the <b>Generate AI Insights</b> button above to scan your real AWS infrastructure for cost-saving opportunities.</p>
           </div>
-        ))}
+        ) : null}
       </div>
     </div>
   );

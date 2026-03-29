@@ -1,21 +1,28 @@
 import React, { useState } from "react";
-import axios from "axios";
+import { Zap } from "lucide-react";
+import { fetchAllAWSResources, isConfigured } from "../awsClient";
+import { useAccount } from "../AccountContext";
 import "./Dashboard.css";
 
-const API = "https://27cc98pjdl.execute-api.ap-south-1.amazonaws.com";
-
 function Dashboard() {
+  const { setActiveArn } = useAccount();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  
-  // Connection States
-  const [accountId, setAccountId] = useState(localStorage.getItem("targetAccountId") || "");
-  const [roleName, setRoleName] = useState(localStorage.getItem("targetRoleName") || "CostOptimizerRole");
+  const [targetId, setTargetId] = useState("");
+  const [targetRole, setTargetRole] = useState("CostOptimizerRole");
+
+  const getCustomArn = () => {
+    if (targetId && targetRole) {
+      return `arn:aws:iam::${targetId}:role/${targetRole}`;
+    }
+    return null;
+  };
+
 
   const fetchData = async () => {
-    if (!accountId || !roleName) {
-      setError("Please provide an AWS Account ID and Role Name before scanning.");
+    if (!isConfigured()) {
+      setError("Please provide AWS Access Key, Secret, and Role ARN in the .env file.");
       return;
     }
 
@@ -23,22 +30,52 @@ function Dashboard() {
     setError("");
     setData(null);
 
-    // Persist latest inputs
-    localStorage.setItem("targetAccountId", accountId);
-    localStorage.setItem("targetRoleName", roleName);
+    const customArn = getCustomArn();
 
     try {
-      const res = await axios.get(`${API}/scan?account_id=${accountId}&role_name=${roleName}`);
-      setData(res.data);
+      const resources = await fetchAllAWSResources(customArn);
+      
+      // Update the global account context
+      if (customArn) {
+        setActiveArn(customArn);
+      } else {
+        setActiveArn(null);
+      }
+      
+      // Calculate summary statistics
+      const summary = {
+        ec2: resources.filter(r => r.type === "EC2 Instance").length,
+        volumes: resources.filter(r => r.type === "EBS Volume").length,
+        snapshots: resources.filter(r => r.type === "Snapshot").length,
+        lbs: resources.filter(r => r.type.includes("Load Balancer")).length,
+        nat: resources.filter(r => r.type === "NAT Gateway").length,
+      };
+
+      // Identify potential idle resources for quick recommendation preview
+      const recommendations = resources.filter(r => r.isIdle).map(r => ({
+        type: r.type,
+        id: r.id,
+        region: r.az,
+        size: r.size,
+        action: r.type === 'NAT Gateway' ? 'Review & Delete' : `Terminate/Delete ${r.type}`,
+        monthly_cost: {
+          'EC2 Instance': 1200,
+          'EBS Volume': 180,
+          'Snapshot': 45,
+          'NAT Gateway': 3240,
+          'Elastic IP': 360,
+          'Load Balancer': 1850
+        }[r.type] || 100
+      }));
+
+      setData({
+        summary,
+        recommendations,
+        total_savings: recommendations.reduce((acc, curr) => acc + curr.monthly_cost, 0)
+      });
     } catch (err) {
-      console.error("Dashboard Fetch Error:", err);
-      // Properly extract backend error messages. Fallback to native error if unavailable.
-      const errorMessage =
-        err.response?.data?.error ||
-        err.response?.data?.message ||
-        err.message ||
-        "An unknown error occurred while fetching data.";
-      setError(errorMessage);
+      console.error("Live Scan Error:", err);
+      setError(err.message || "Failed to scan AWS account. Check your IAM credentials.");
     } finally {
       setLoading(false);
     }
@@ -53,46 +90,44 @@ function Dashboard() {
         </h1>
       </div>
 
-      <div className="dashboard-connection-card">
-        <div className="dashboard-input-row">
-          <div className="dashboard-input-group">
-            <label>AWS Account ID</label>
+      <div className="dashboard-summary-banner">
+        <div className="dashboard-input-fields">
+          <div className="dashboard-input-field">
+            <label>Target Account ID</label>
             <input 
               type="text" 
-              placeholder="e.g. 123456789012" 
-              value={accountId} 
-              onChange={(e) => setAccountId(e.target.value)}
+              placeholder="e.g. 112233445566" 
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
               disabled={loading}
             />
           </div>
-          <div className="dashboard-input-group">
-            <label>IAM Role Name</label>
+          <div className="dashboard-input-field">
+            <label>Role Name</label>
             <input 
               type="text" 
               placeholder="e.g. CostOptimizerRole" 
-              value={roleName} 
-              onChange={(e) => setRoleName(e.target.value)}
+              value={targetRole}
+              onChange={(e) => setTargetRole(e.target.value)}
               disabled={loading}
             />
           </div>
         </div>
+        
         <button
-          className="dashboard-scan-btn"
+          className={`dashboard-scan-btn ${loading ? 'loading' : ''}`}
           onClick={fetchData}
           disabled={loading}
         >
           {loading ? (
             <>
               <div className="dashboard-spinner"></div>
-              Scanning Account...
+              Scanning Infrastructure...
             </>
           ) : (
             <>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-              Scan Resources
+              <Zap size={18} />
+              Scan Real Environment
             </>
           )}
         </button>
@@ -128,24 +163,24 @@ function Dashboard() {
 
           <div className="dashboard-summary-grid">
             <div className="dashboard-summary-item">
-              <div className="dashboard-summary-value">{data.unused_volumes ?? 0}</div>
-              <div className="dashboard-summary-label">Unused Volumes</div>
+              <div className="dashboard-summary-value">{data.summary.volumes}</div>
+              <div className="dashboard-summary-label">EBS Volumes</div>
             </div>
             <div className="dashboard-summary-item">
-              <div className="dashboard-summary-value">{data.snapshots ?? 0}</div>
+              <div className="dashboard-summary-value">{data.summary.snapshots}</div>
               <div className="dashboard-summary-label">Snapshots</div>
             </div>
             <div className="dashboard-summary-item">
-              <div className="dashboard-summary-value">{data.idle_ec2 ?? 0}</div>
-              <div className="dashboard-summary-label">Idle EC2</div>
+              <div className="dashboard-summary-value">{data.summary.ec2}</div>
+              <div className="dashboard-summary-label">EC2 Instances</div>
             </div>
             <div className="dashboard-summary-item">
-              <div className="dashboard-summary-value">{data.unused_load_balancers ?? 0}</div>
-              <div className="dashboard-summary-label">Unused LBs</div>
+              <div className="dashboard-summary-value">{data.summary.lbs}</div>
+              <div className="dashboard-summary-label">Load Balancers</div>
             </div>
             <div className="dashboard-summary-item">
-              <div className="dashboard-summary-value">{data.nat_gateways ?? 0}</div>
-              <div className="dashboard-summary-label">Idle NAT Gate</div>
+              <div className="dashboard-summary-value">{data.summary.nat}</div>
+              <div className="dashboard-summary-label">NAT Gateways</div>
             </div>
           </div>
 

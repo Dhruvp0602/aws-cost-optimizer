@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { AccountProvider } from "./AccountContext";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import CostDashboard from "./pages/CostDashboard";
@@ -34,6 +35,7 @@ function App() {
   };
 
   return (
+    <AccountProvider>
     <div className="app-container">
       <nav className="app-sidebar">
         <div className="app-logo">
@@ -100,6 +102,7 @@ function App() {
         </div>
       </main>
     </div>
+    </AccountProvider>
   );
 }
 
