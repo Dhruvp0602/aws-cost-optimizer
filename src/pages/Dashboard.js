@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Zap } from "lucide-react";
-import { fetchAllAWSResources, isConfigured } from "../awsClient";
-import { useAccount } from "../AccountContext";
+import { fetchAllAWSResources, isConfigured } from "../services/awsClient";
+import { useAccount } from "../context/AccountContext";
 import "./Dashboard.css";
 
 function Dashboard() {

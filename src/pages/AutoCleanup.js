@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Trash2, AlertTriangle, Settings, CheckSquare, Square, RefreshCw } from "lucide-react";
-import { fetchAllAWSResources, isConfigured } from "../awsClient";
-import { useAccount } from "../AccountContext";
+import { fetchAllAWSResources, isConfigured } from "../services/awsClient";
+import { useAccount } from "../context/AccountContext";
 import "./AutoCleanup.css";
 
 function AutoCleanup() {

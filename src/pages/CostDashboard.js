@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { TrendingDown, Activity, IndianRupee, Calendar, TrendingUp, AlertCircle } from "lucide-react";
-import { fetchAllAWSResources, isConfigured } from "../awsClient";
-import { useAccount } from "../AccountContext";
+import { fetchAllAWSResources, isConfigured } from "../services/awsClient";
+import { useAccount } from "../context/AccountContext";
 import "./CostDashboard.css";
 
 const COLORS = ["#0ea5e9", "#8b5cf6", "#f59e0b", "#10b981", "#64748b", "#f87171"];

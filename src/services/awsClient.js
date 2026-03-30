@@ -2,7 +2,24 @@ import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from "@aws-sdk
 import { EC2Client, DescribeInstancesCommand, DescribeVolumesCommand, DescribeAddressesCommand, DescribeNatGatewaysCommand, DescribeSnapshotsCommand } from "@aws-sdk/client-ec2";
 import { ElasticLoadBalancingV2Client, DescribeLoadBalancersCommand } from "@aws-sdk/client-elastic-load-balancing-v2";
 
-const region = process.env.REACT_APP_AWS_REGION || "ap-south-1";
+// ─── All regions to scan ──────────────────────────────────────────────────────
+const ALL_REGIONS = [
+  "ap-south-1",       // Asia Pacific (Mumbai)
+  "ap-southeast-1",   // Asia Pacific (Singapore)
+  "ap-southeast-2",   // Asia Pacific (Sydney)
+  "ap-northeast-1",   // Asia Pacific (Tokyo)
+  "ap-northeast-2",   // Asia Pacific (Seoul)
+  "us-east-1",        // US East (N. Virginia)
+  "us-east-2",        // US East (Ohio)
+  "us-west-1",        // US West (N. California)
+  "us-west-2",        // US West (Oregon)
+  "eu-west-1",        // Europe (Ireland)
+  "eu-west-2",        // Europe (London)
+  "eu-central-1",     // Europe (Frankfurt)
+  "ca-central-1",     // Canada (Central)
+];
+
+const defaultRegion = process.env.REACT_APP_AWS_REGION || "ap-south-1";
 const roleArn = process.env.REACT_APP_AWS_ROLE_ARN;
 const accessKeyId = process.env.REACT_APP_AWS_ACCESS_KEY_ID;
 const secretAccessKey = process.env.REACT_APP_AWS_SECRET_ACCESS_KEY;
@@ -14,11 +31,10 @@ const hasCredentials = accessKeyId && secretAccessKey &&
 const resolveCredentials = async (overrideRoleArn) => {
   if (!hasCredentials) throw new Error("NO_CREDENTIALS");
 
-  // Only use AssumeRole if an explicit cross-account ARN is provided
   const activeRoleArn = overrideRoleArn || null;
 
   if (activeRoleArn) {
-    const sts = new STSClient({ region, credentials: { accessKeyId, secretAccessKey } });
+    const sts = new STSClient({ region: defaultRegion, credentials: { accessKeyId, secretAccessKey } });
     const res = await sts.send(new AssumeRoleCommand({
       RoleArn: activeRoleArn,
       RoleSessionName: "cost-optimizer-scan",
@@ -31,53 +47,55 @@ const resolveCredentials = async (overrideRoleArn) => {
     };
   }
 
-  // No ARN = scan own account directly with IAM user credentials (no CORS issue)
   return { accessKeyId, secretAccessKey };
 };
 
 // ─── Get Account ID ───────────────────────────────────────────────────────────
 export const fetchAWSAccountId = async (overrideRoleArn) => {
   const creds = await resolveCredentials(overrideRoleArn);
-  const sts = new STSClient({ region, credentials: creds });
+  const sts = new STSClient({ region: defaultRegion, credentials: creds });
   const res = await sts.send(new GetCallerIdentityCommand({}));
   return res.Account;
 };
 
-// ─── Full Resource Scan (Read-Only, 100% Free) ────────────────────────────────
-export const fetchAllAWSResources = async (overrideRoleArn) => {
-  const creds = await resolveCredentials(overrideRoleArn);
-  const ec2 = new EC2Client({ region, credentials: creds });
-  const elb = new ElasticLoadBalancingV2Client({ region, credentials: creds });
+// ─── Scan a single region ─────────────────────────────────────────────────────
+const scanRegion = async (regionName, creds, ownerId) => {
+  const ec2 = new EC2Client({ region: regionName, credentials: creds });
+  const elb = new ElasticLoadBalancingV2Client({ region: regionName, credentials: creds });
+  const resources = [];
 
   const [ec2Res, volRes, ipRes, natRes, snapRes, lbRes] = await Promise.allSettled([
     ec2.send(new DescribeInstancesCommand({})),
     ec2.send(new DescribeVolumesCommand({})),
     ec2.send(new DescribeAddressesCommand({})),
     ec2.send(new DescribeNatGatewaysCommand({})),
-    ec2.send(new DescribeSnapshotsCommand({ Filters: [{ Name: "owner-id", Values: [await fetchAWSAccountId()] }] })),
+    ownerId
+      ? ec2.send(new DescribeSnapshotsCommand({ Filters: [{ Name: "owner-id", Values: [ownerId] }] }))
+      : Promise.reject("no owner id"),
     elb.send(new DescribeLoadBalancersCommand({})),
   ]);
 
-  const resources = [];
-
   // EC2 Instances - Filter out 'terminated'
   if (ec2Res.status === 'fulfilled') {
-    ec2Res.value.Reservations?.forEach(r => r.Instances?.filter(inst => inst.State?.Name !== 'terminated').forEach(inst => {
-      const name = inst.Tags?.find(t => t.Key === 'Name')?.Value || inst.InstanceId;
-      resources.push({
-        id: inst.InstanceId,
-        type: "EC2 Instance",
-        name,
-        state: inst.State?.Name,
-        size: inst.InstanceType,
-        az: inst.Placement?.AvailabilityZone,
-        launchTime: inst.LaunchTime,
-        isIdle: inst.State?.Name === 'stopped',
-      });
-    }));
+    ec2Res.value.Reservations?.forEach(r =>
+      r.Instances?.filter(inst => inst.State?.Name !== 'terminated').forEach(inst => {
+        const name = inst.Tags?.find(t => t.Key === 'Name')?.Value || inst.InstanceId;
+        resources.push({
+          id: inst.InstanceId,
+          type: "EC2 Instance",
+          name,
+          state: inst.State?.Name,
+          size: inst.InstanceType,
+          az: inst.Placement?.AvailabilityZone,
+          region: regionName,
+          launchTime: inst.LaunchTime,
+          isIdle: inst.State?.Name === 'stopped',
+        });
+      })
+    );
   }
 
-  // EBS Volumes - Filter out 'deleting' 
+  // EBS Volumes - Filter out 'deleting'
   if (volRes.status === 'fulfilled') {
     volRes.value.Volumes?.filter(vol => vol.State !== 'deleting' && vol.State !== 'deleted').forEach(vol => {
       const name = vol.Tags?.find(t => t.Key === 'Name')?.Value || vol.VolumeId;
@@ -88,6 +106,7 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
         state: vol.State,
         size: `${vol.Size} GB (${vol.VolumeType})`,
         az: vol.AvailabilityZone,
+        region: regionName,
         launchTime: vol.CreateTime,
         isIdle: vol.Attachments?.length === 0,
       });
@@ -103,7 +122,8 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
         name: addr.PublicIp,
         state: addr.AssociationId ? 'associated' : 'unassociated',
         size: addr.Domain,
-        az: region,
+        az: regionName,
+        region: regionName,
         launchTime: null,
         isIdle: !addr.AssociationId,
       });
@@ -120,9 +140,10 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
         name,
         state: gw.State,
         size: gw.ConnectivityType || 'public',
-        az: region,
+        az: regionName,
+        region: regionName,
         launchTime: gw.CreateTime,
-        isIdle: gw.State === 'available', // Suggest review for any existing NAT Gateway
+        isIdle: gw.State === 'available',
       });
     });
   }
@@ -137,7 +158,8 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
         name,
         state: snap.State,
         size: `${snap.VolumeSize} GB`,
-        az: region,
+        az: regionName,
+        region: regionName,
         launchTime: snap.StartTime,
         isIdle: !snap.Description?.includes('Created by'),
       });
@@ -153,7 +175,8 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
         name: lb.LoadBalancerName,
         state: lb.State?.Code,
         size: lb.Scheme,
-        az: lb.AvailabilityZones?.[0]?.ZoneName || region,
+        az: lb.AvailabilityZones?.[0]?.ZoneName || regionName,
+        region: regionName,
         launchTime: lb.CreatedTime,
         isIdle: false,
       });
@@ -161,6 +184,38 @@ export const fetchAllAWSResources = async (overrideRoleArn) => {
   }
 
   return resources;
+};
+
+// ─── Full Multi-Region Resource Scan ─────────────────────────────────────────
+export const fetchAllAWSResources = async (overrideRoleArn) => {
+  const creds = await resolveCredentials(overrideRoleArn);
+
+  // Get the owner account ID once (for snapshot filtering)
+  let ownerId = null;
+  try {
+    const sts = new STSClient({ region: defaultRegion, credentials: creds });
+    const identity = await sts.send(new GetCallerIdentityCommand({}));
+    ownerId = identity.Account;
+  } catch (e) {
+    console.warn("Could not get caller identity, skipping snapshot owner filter");
+  }
+
+  // Scan all regions in parallel
+  const regionResults = await Promise.allSettled(
+    ALL_REGIONS.map(r => scanRegion(r, creds, ownerId))
+  );
+
+  // Flatten all results into one array
+  const allResources = [];
+  regionResults.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      allResources.push(...result.value);
+    } else {
+      console.warn(`Region ${ALL_REGIONS[i]} scan failed:`, result.reason?.message || result.reason);
+    }
+  });
+
+  return allResources;
 };
 
 export const isConfigured = () => hasCredentials;

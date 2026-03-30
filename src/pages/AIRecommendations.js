@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Sparkles, ArrowRight, Zap, CheckCircle2, AlertTriangle, Cpu } from "lucide-react";
-import { fetchAllAWSResources, isConfigured } from "../awsClient";
-import { useAccount } from "../AccountContext";
+import { fetchAllAWSResources, isConfigured } from "../services/awsClient";
+import { useAccount } from "../context/AccountContext";
 import "./AIRecommendations.css";
 
 function AIRecommendations() {
@@ -47,14 +47,21 @@ function AIRecommendations() {
       Analyze these SPECIFIC resources and generate exactly 3 highly actionable cost-saving recommendations as a JSON array.
       
       Look specifically for:
-      1. NAT Gateways that are idle or in regions with zero traffic (NAT Gateways cost ~₹3200/mo just to exist).
-      2. EC2 Instances that are 'stopped' or have low utilization.
-      3. EBS Volumes that are 'unattached' (orphaned).
-      4. Elastic IPs that are 'unassociated' (they cost money when NOT used).
-      5. Old Snapshots that are no longer needed.
+      1. NAT Gateways (charge ₹3,240/mo FIXED regardless of traffic - always recommend review).
+      2. EC2 Instances that are 'stopped' (charge ₹0 but the attached EBS costs money).
+      3. EBS Volumes that are 'unattached' (isIdle=true) - use ₹180/mo per volume.
+      4. Elastic IPs that are 'unassociated' (isIdle=true) - use ₹360/mo per IP.
+      5. Snapshots older than 30 days - use ₹45/mo per snapshot.
+      
+      IMPORTANT RULES FOR SAVINGS VALUES:
+      - Use ONLY these fixed monthly prices (do NOT invent prices):
+        NAT Gateway = 3240, EC2 stopped = 1200, EBS unattached = 180, Elastic IP unassociated = 360, Snapshot = 45
+      - Count the EXACT number of matching resources from the list above and multiply by the fixed price.
+      - The "savings" field MUST be a number (no strings, no ranges).
+      - Do NOT use approximate or random values.
       
       Output ONLY raw JSON with no markdown fences, no explanation, no preamble.
-      Format: [{"id":"ai-1","title":"...","description":"...","service":"EC2|NAT Gateway|EBS|S3|EIP","savings":123.45,"impact":"High|Medium","applied":false}]`;
+      Format: [{"id":"ai-1","title":"...","description":"...","service":"EC2|NAT Gateway|EBS|EIP|Snapshot","savings":3240,"impact":"High|Medium","applied":false}]`;
 
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -65,8 +72,9 @@ function AIRecommendations() {
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
           messages: [{ role: "user", content: prompt }],
-          temperature: 0.7,
-          max_tokens: 1024
+          temperature: 0,   // Deterministic — prevents changing values on each run
+          max_tokens: 1024,
+          seed: 42          // Fixed seed for reproducibility
         })
       });
 

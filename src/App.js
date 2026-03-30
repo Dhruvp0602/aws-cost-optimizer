@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { AccountProvider } from "./AccountContext";
+import { AccountProvider } from "./context/AccountContext";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import CostDashboard from "./pages/CostDashboard";
