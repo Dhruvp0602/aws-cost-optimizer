@@ -1,6 +1,6 @@
-# AWS Cost Optimizer
+# AWS Cost Optimizer (Monorepo)
 
-A real-time AWS infrastructure cost analysis and optimization SaaS dashboard built with React and the AWS SDK.
+A professional AWS infrastructure cost analysis and optimization SaaS dashboard. This project is structured as a monorepo containing a React frontend and a Python AWS Lambda backend.
 
 ---
 
@@ -9,71 +9,41 @@ A real-time AWS infrastructure cost analysis and optimization SaaS dashboard bui
 ```
 aws-cost-optimizer/
 │
-├── public/                     # Static assets served by React
-│   ├── index.html              # App shell (title, meta tags)
-│   └── logo.png                # App logo
+├── frontend/                    # React Application
+│   ├── public/                  # Static assets
+│   ├── src/                     # Source code
+│   ├── .env                     # 🔑 Configuration (AWS & Groq Keys)
+│   ├── package.json             # React dependencies
+│   └── node_modules/            # Installed packages
 │
-├── src/                        # React application source
-│   │
-│   ├── context/                # ─── Global State ───────────────────
-│   │   └── AccountContext.js   # Shared AWS account ARN (cross-page sync)
-│   │
-│   ├── services/               # ─── AWS Integration Layer ──────────
-│   │   └── awsClient.js        # EC2, EBS, NAT, STS, ELB scanners
-│   │
-│   ├── pages/                  # ─── Full-Page Views ────────────────
-│   │   ├── Login.js / .css         # Auth entry screen
-│   │   ├── Dashboard.js / .css     # Infrastructure Scanner (main)
-│   │   ├── CostDashboard.js / .css # Real-time cost charts & KPIs
-│   │   ├── AIRecommendations.js / .css  # Groq AI cost insights
-│   │   ├── AutoCleanup.js / .css   # Idle resource suggestions
-│   │   ├── Alerts.js / .css        # Cost alert rules
-│   │   └── ConnectAWS.js / .css    # AWS connection helper
-│   │
-│   ├── App.js                  # Root router & sidebar navigation
-│   ├── App.css                 # Global layout styles
-│   ├── index.js                # React DOM entry point
-│   └── index.css               # Base CSS reset
+├── lambda/                      # AWS Lambda Backend
+│   └── lambda_function.py       # Python scanning logic
 │
-├── .env                        # 🔑 AWS credentials (gitignored)
-├── package.json                # Dependencies & scripts
-└── README.md                   # This file
+├── README.md                    # This file (Root)
+└── .gitignore                  # Global ignore rules
 ```
-
----
-
-## 🔑 Environment Variables (`.env`)
-
-```env
-REACT_APP_AWS_ACCESS_KEY_ID=your_iam_user_access_key
-REACT_APP_AWS_SECRET_ACCESS_KEY=your_iam_user_secret_key
-REACT_APP_AWS_REGION=ap-south-1
-REACT_APP_AWS_ROLE_ARN=                         # Leave blank for own account
-REACT_APP_GROQ_API_KEY=your_groq_api_key
-```
-
-> ⚠️ Use **IAM User** credentials, NOT root account credentials. Root accounts cannot assume roles.
 
 ---
 
 ## 🚀 Getting Started
 
+### 1. Frontend Setup
 ```bash
+cd frontend
 npm install
 npm start
 ```
-
 Open [http://localhost:3000](http://localhost:3000)
+
+### 2. Backend (Lambda)
+The Python code inside the `lambda/` folder is designed to be deployed to AWS Lambda. You can zip the contents of that folder and upload it directly.
 
 ---
 
 ## ✨ Features
 
-| Feature | Description |
-|---|---|
-| **Infrastructure Scanner** | Live scan of EC2, EBS, NAT Gateways, EIPs, Snapshots, LBs |
-| **Cross-Account Scanning** | Enter any Account ID + Role Name to scan a friend's account |
-| **Real-Time Cost Center** | Live cost distribution charts based on actual resource counts |
-| **AI Insights (Groq)** | Llama 3.1-powered cost-saving recommendations |
-| **Auto Cleanup** | Identifies idle/orphaned resources worth removing |
-| **Cost Alerts** | Configurable spend threshold alerts |
+- **Infrastructure Scanner**: Live scan of EC2, EBS, NAT Gateways, EIPs, Snapshots, and Load Balancers.
+- **Multi-Region Support**: Scans 13 major AWS regions simultaneously.
+- **Cross-Account Scanning**: Scan resources from any account using STS AssumeRole.
+- **Groq AI Analysis**: Llama 3.1-powered cost optimization insights.
+- **Cost Dashboard**: Real-time spending distribution and savings KPIs.
